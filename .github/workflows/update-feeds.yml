@@ -30,7 +30,7 @@ jobs:
           cache: pip
       - run: pip install -r requirements-dev.txt
       - name: Ejecutar pruebas
-        run: pytest -q
+        run: python -m pytest -q
       - name: Recuperar feeds publicados
         env:
           PAGES_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}

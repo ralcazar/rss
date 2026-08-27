@@ -42,7 +42,7 @@ python -m venv .venv
 pip install -r requirements-dev.txt
 python -m rss_generator --base-url https://USUARIO.github.io/REPOSITORIO
 python scripts/validate_feeds.py site/feeds
-pytest -q
+python -m pytest -q
 ```
 
 Los feeds quedan en `site/feeds`. El generador conserva y combina las entradas de un feed
