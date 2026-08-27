@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -13,6 +14,21 @@ from bs4 import BeautifulSoup, Tag
 
 LOG = logging.getLogger(__name__)
 USER_AGENT = "Mozilla/5.0 (compatible; rss-pages/1.0; +https://github.com/)"
+SPANISH_MONTHS = {
+    "enero": 1,
+    "febrero": 2,
+    "marzo": 3,
+    "abril": 4,
+    "mayo": 5,
+    "junio": 6,
+    "julio": 7,
+    "agosto": 8,
+    "septiembre": 9,
+    "setiembre": 9,
+    "octubre": 10,
+    "noviembre": 11,
+    "diciembre": 12,
+}
 
 
 class ScrapeError(RuntimeError):
@@ -38,6 +54,15 @@ def parse_date(value: str | None) -> datetime | None:
     if not value:
         return None
     clean = value.strip()
+    spanish = re.fullmatch(r"(\d{1,2})\s+de\s+([a-záéíóú]+)\s+de\s+(\d{2}|\d{4})", clean.casefold())
+    if spanish and spanish.group(2) in SPANISH_MONTHS:
+        year = int(spanish.group(3))
+        if year < 100:
+            year += 2000
+        try:
+            return datetime(year, SPANISH_MONTHS[spanish.group(2)], int(spanish.group(1)), tzinfo=timezone.utc)
+        except ValueError:
+            return None
     try:
         parsed = datetime.fromisoformat(clean.replace("Z", "+00:00"))
     except ValueError:
@@ -101,7 +126,11 @@ def _from_html(soup: BeautifulSoup, base: str) -> list[Item]:
         containers = [a.parent for a in soup.select('a[href*="/noticias/"]') if isinstance(a.parent, Tag)]
     items: list[Item] = []
     for node in containers:
-        link = node.select_one('h1 a[href], h2 a[href], h3 a[href], a[href*="/noticias/"]')
+        link = node.select_one("h1 a[href], h2 a[href], h3 a[href]")
+        if link is None:
+            link = node.select_one("a.card-title[href]")
+        if link is None:
+            link = node.select_one('a[href*="/noticias/"], a[href*="/-/"]')
         if not link or not link.get("href"):
             continue
         title = link.get_text(" ", strip=True) or link.get("title", "").strip()
@@ -111,7 +140,7 @@ def _from_html(soup: BeautifulSoup, base: str) -> list[Item]:
         date_value = (time.get("datetime") if time else None) or _first_text(node, (".date", ".fecha", ".field--name-field-fecha"))
         image_node = node.select_one("img[src], img[data-src]")
         image = (image_node.get("src") or image_node.get("data-src")) if image_node else None
-        description = _first_text(node, (".summary", ".entradilla", ".field--name-body", "p"))
+        description = _first_text(node, (".summary", ".entradilla", ".field--name-body", ".card-text", "p"))
         items.append(Item(title, canonical_url(str(link["href"]), base), description, parse_date(date_value), urljoin(base, image) if image else None))
     return items
 
