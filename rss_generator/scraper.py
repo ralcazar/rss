@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -42,6 +43,23 @@ class Item:
     description: str = ""
     published: datetime | None = None
     image: str | None = None
+    content: str = ""
+    images: tuple[str, ...] = ()
+    videos: tuple[str, ...] = ()
+
+
+DETAIL_SELECTORS = (
+    "article.template-detail-noticia",
+    ".journal-content-article article",
+    "[itemprop='articleBody']",
+    ".article-body",
+    ".entry-content",
+    ".post-content",
+    "main article",
+)
+IMAGE_URL = re.compile(r"\.(?:avif|gif|jpe?g|png|svg|webp)(?:[/?#]|$)", re.IGNORECASE)
+VIDEO_URL = re.compile(r"\.(?:m3u8|m4v|mov|mp4|mpeg|ogv|webm)(?:[/?#]|$)", re.IGNORECASE)
+VIDEO_PAGE = re.compile(r"(?:youtu\.be|youtube(?:-nocookie)?\.com|vimeo\.com|seneca\.tv)", re.IGNORECASE)
 
 
 def canonical_url(url: str, base: str) -> str:
@@ -120,6 +138,100 @@ def _first_text(node: Tag, selectors: tuple[str, ...]) -> str:
     return ""
 
 
+def _absolute_url(value: str | None, base: str) -> str | None:
+    if not value:
+        return None
+    value = value.strip()
+    if not value or value.startswith(("data:", "javascript:", "#")):
+        return None
+    return urljoin(base, value)
+
+
+def _unique(values: list[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(value for value in values if value))
+
+
+def _normalize_article(root: Tag, base: str) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+    """Make an article self-contained and return all of its media URLs."""
+    for unwanted in root.select("script, style, noscript, template, form, button"):
+        unwanted.decompose()
+
+    images: list[str] = []
+    videos: list[str] = []
+    for tag in root.find_all(True):
+        for attribute in tuple(tag.attrs):
+            if attribute.casefold().startswith("on"):
+                del tag.attrs[attribute]
+
+        if tag.name == "img":
+            source = tag.get("src") or tag.get("data-src") or tag.get("data-lazy-src")
+            parent = tag.parent
+            if isinstance(parent, Tag) and parent.name == "a" and IMAGE_URL.search(str(parent.get("href", ""))):
+                source = parent.get("href")
+            absolute = _absolute_url(str(source), base) if source else None
+            if absolute:
+                tag["src"] = absolute
+                images.append(absolute)
+            for lazy_attribute in ("data-src", "data-lazy-src"):
+                tag.attrs.pop(lazy_attribute, None)
+
+        is_video_source = tag.name == "source" and (
+            (isinstance(tag.parent, Tag) and tag.parent.name in {"audio", "video"})
+            or VIDEO_URL.search(str(tag.get("src", ""))) is not None
+        )
+        if tag.name in {"iframe", "video"} or is_video_source:
+            source = tag.get("src") or tag.get("data-src") or tag.get("data-lazy-src")
+            absolute = _absolute_url(str(source), base) if source else None
+            if absolute:
+                tag["src"] = absolute
+                videos.append(absolute)
+            tag.attrs.pop("data-src", None)
+            tag.attrs.pop("data-lazy-src", None)
+
+        poster = _absolute_url(str(tag.get("poster")), base) if tag.get("poster") else None
+        if poster:
+            tag["poster"] = poster
+            images.append(poster)
+
+        if tag.name == "a" and tag.get("href"):
+            href = _absolute_url(str(tag["href"]), base)
+            if href:
+                tag["href"] = href
+                if IMAGE_URL.search(href):
+                    images.append(href)
+                elif VIDEO_URL.search(href) or VIDEO_PAGE.search(href):
+                    videos.append(href)
+
+        if tag.get("srcset"):
+            candidates = []
+            for candidate in str(tag["srcset"]).split(","):
+                parts = candidate.strip().split()
+                absolute = _absolute_url(parts[0], base) if parts else None
+                if absolute:
+                    candidates.append(" ".join((absolute, *parts[1:])))
+            if candidates:
+                tag["srcset"] = ", ".join(candidates)
+
+    return str(root), _unique(images), _unique(videos)
+
+
+def _from_detail(soup: BeautifulSoup, base: str, item: Item) -> Item:
+    root = next((soup.select_one(selector) for selector in DETAIL_SELECTORS if soup.select_one(selector)), None)
+    if not isinstance(root, Tag):
+        return item
+    content, images, videos = _normalize_article(root, base)
+    if not root.get_text(" ", strip=True):
+        return item
+    primary = images[0] if images else item.image
+    return replace(
+        item,
+        image=primary,
+        content=content,
+        images=tuple(image for image in images if image != primary),
+        videos=videos,
+    )
+
+
 def _from_html(soup: BeautifulSoup, base: str) -> list[Item]:
     containers = soup.select("article, .views-row, .noticia, .news-item, .card")
     if not containers:
@@ -145,6 +257,23 @@ def _from_html(soup: BeautifulSoup, base: str) -> list[Item]:
     return items
 
 
+def enrich_items(items: list[Item]) -> list[Item]:
+    """Download the detail page for items that only contain a listing summary."""
+    def enrich(item: Item) -> Item:
+        try:
+            detail = requests.get(item.url, headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"}, timeout=(10, 30))
+            detail.raise_for_status()
+        except requests.RequestException as error:
+            LOG.warning("no se pudo descargar el texto completo de %s: %s", item.url, error)
+            return item
+        return _from_detail(BeautifulSoup(detail.text, "html.parser"), item.url, item)
+
+    if not items:
+        return []
+    with ThreadPoolExecutor(max_workers=min(4, len(items))) as executor:
+        return list(executor.map(enrich, items))
+
+
 def scrape_source(source: dict[str, str]) -> list[Item]:
     try:
         response = requests.get(source["url"], headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"}, timeout=(10, 30))
@@ -156,4 +285,4 @@ def scrape_source(source: dict[str, str]) -> list[Item]:
     unique = {item.url: item for item in candidates}
     if not unique:
         raise ScrapeError("la página no contiene noticias reconocibles")
-    return list(unique.values())
+    return enrich_items(list(unique.values()))

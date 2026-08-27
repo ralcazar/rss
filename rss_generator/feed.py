@@ -32,12 +32,31 @@ def read_existing_feed(path: Path) -> list[Item]:
     result = []
     for node in root.findall("./channel/item"):
         date = node.findtext("pubDate")
-        image_node = node.find(f"{{{MEDIA}}}content")
+        media_nodes = node.findall(f"{{{MEDIA}}}content")
+        images = [media.get("url", "") for media in media_nodes if media.get("medium") == "image" and media.get("url")]
+        videos = [media.get("url", "") for media in media_nodes if media.get("medium") == "video" and media.get("url")]
+        description = node.findtext("description", "")
+        content = node.findtext(f"{{{CONTENT}}}encoded", "")
+        # Older feeds used content:encoded for the plain listing summary too.
+        # Detail content is HTML, so keeping only HTML here lets the CLI migrate
+        # old summaries once without re-downloading completed articles forever.
+        stored_content = content if "<" in content and ">" in content else ""
         try:
             published = parsedate_to_datetime(date) if date else None
         except (TypeError, ValueError):
             published = None
-        result.append(Item(node.findtext("title", ""), node.findtext("link", ""), node.findtext("description", ""), published, image_node.get("url") if image_node is not None else None))
+        result.append(
+            Item(
+                node.findtext("title", ""),
+                node.findtext("link", ""),
+                description,
+                published,
+                images[0] if images else None,
+                stored_content,
+                tuple(images[1:]),
+                tuple(videos),
+            )
+        )
     return result
 
 
@@ -66,14 +85,20 @@ def write_feed(source: dict[str, str], items: list[Item], target: Path, base_url
         _text(node, "link", entry.url)
         guid = _text(node, "guid", entry.url)
         guid.set("isPermaLink", "true")
-        if entry.description:
-            _text(node, "description", entry.description)
-            _text(node, f"{{{CONTENT}}}encoded", entry.description)
+        full_content = entry.content or entry.description
+        if full_content:
+            # Some clients only render description, while others prefer content:encoded.
+            # Publishing the complete HTML in both prevents either client from truncating it.
+            _text(node, "description", full_content)
+            _text(node, f"{{{CONTENT}}}encoded", full_content)
         if entry.published:
             date = entry.published if entry.published.tzinfo else entry.published.replace(tzinfo=timezone.utc)
             _text(node, "pubDate", format_datetime(date.astimezone(timezone.utc), usegmt=True))
-        if entry.image:
-            ET.SubElement(node, f"{{{MEDIA}}}content", {"url": entry.image, "medium": "image"})
+        for image in dict.fromkeys(filter(None, (entry.image, *entry.images))):
+            ET.SubElement(node, f"{{{MEDIA}}}content", {"url": image, "medium": "image"})
+        for video in dict.fromkeys(entry.videos):
+            media = ET.SubElement(node, f"{{{MEDIA}}}content", {"url": video, "medium": "video"})
+            ET.SubElement(media, f"{{{MEDIA}}}player", {"url": video})
     ET.indent(rss, space="  ")
     target.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(rss).write(target, encoding="utf-8", xml_declaration=True)

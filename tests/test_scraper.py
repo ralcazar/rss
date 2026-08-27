@@ -2,7 +2,7 @@ from datetime import timezone
 
 from bs4 import BeautifulSoup
 
-from rss_generator.scraper import _from_html, _from_json_ld, canonical_url, parse_date
+from rss_generator.scraper import Item, _from_detail, _from_html, _from_json_ld, canonical_url, parse_date
 
 
 def test_extracts_json_ld_article():
@@ -48,3 +48,27 @@ def test_normalizes_url_and_dates():
     assert canonical_url("/noticias/uno/?utm_source=x#top", "https://WWW.ColladoVillalba.es") == "https://www.colladovillalba.es/noticias/uno"
     assert parse_date("Tue, 25 Aug 2026 10:00:00 GMT").tzinfo == timezone.utc
     assert parse_date("una fecha desconocida") is None
+
+
+def test_extracts_complete_article_and_all_media():
+    html = '''<main><article class="template-detail-noticia">
+      <h1>Noticia completa</h1>
+      <a href="/original/uno.jpg"><img src="/adaptive/uno.jpg"></a>
+      <div class="text"><p>Primer párrafo.</p><p>Último párrafo, que no aparecía en el resumen.</p>
+        <img data-src="/media/dos.webp">
+        <iframe data-src="https://www.youtube.com/embed/abc"></iframe>
+        <video poster="/media/cartel.jpg"><source src="/media/clip.mp4"></video>
+      </div><script>alert('no')</script>
+    </article></main>'''
+    summary = Item("Noticia completa", "https://example.es/noticias/1", "Primer párrafo…", image="https://example.es/portada.jpg")
+    item = _from_detail(BeautifulSoup(html, "html.parser"), summary.url, summary)
+
+    assert "Último párrafo" in item.content
+    assert "script" not in item.content
+    assert 'src="https://example.es/original/uno.jpg"' in item.content
+    assert item.image == "https://example.es/original/uno.jpg"
+    assert item.images == (
+        "https://example.es/media/dos.webp",
+        "https://example.es/media/cartel.jpg",
+    )
+    assert item.videos == ("https://www.youtube.com/embed/abc", "https://example.es/media/clip.mp4")

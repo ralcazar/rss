@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from xml.etree import ElementTree as ET
 
-from rss_generator.feed import ATOM, MEDIA, read_existing_feed, write_feed
+from rss_generator.feed import ATOM, CONTENT, MEDIA, read_existing_feed, write_feed
 from rss_generator.scraper import Item
 
 
@@ -26,3 +26,33 @@ def test_limits_and_orders_entries(tmp_path):
     path = tmp_path / "feed.xml"
     write_feed(SOURCE, [old, new], path, "https://example.test", 1)
     assert ET.parse(path).findtext("./channel/item/title") == "Nueva"
+
+
+def test_writes_full_html_and_every_image_and_video(tmp_path):
+    path = tmp_path / "feed.xml"
+    content = "<article><p>Texto completo</p><img src=\"https://example.es/1.jpg\"></article>"
+    item = Item(
+        "Titular",
+        "https://example.es/1",
+        "Resumen cortado…",
+        image="https://example.es/1.jpg",
+        content=content,
+        images=("https://example.es/2.jpg",),
+        videos=("https://www.youtube.com/embed/abc", "https://example.es/video.mp4"),
+    )
+    write_feed(SOURCE, [item], path, "https://example.test", 50)
+    node = ET.parse(path).find("./channel/item")
+
+    assert node.findtext("description") == content
+    assert node.findtext(f"{{{CONTENT}}}encoded") == content
+    media = node.findall(f"{{{MEDIA}}}content")
+    assert [(entry.get("medium"), entry.get("url")) for entry in media] == [
+        ("image", "https://example.es/1.jpg"),
+        ("image", "https://example.es/2.jpg"),
+        ("video", "https://www.youtube.com/embed/abc"),
+        ("video", "https://example.es/video.mp4"),
+    ]
+    restored = read_existing_feed(path)[0]
+    assert restored.content == content
+    assert restored.images == ("https://example.es/2.jpg",)
+    assert restored.videos == item.videos

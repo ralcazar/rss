@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 from .feed import read_existing_feed, write_feed
-from .scraper import ScrapeError, scrape_source
+from .scraper import ScrapeError, enrich_items, scrape_source
 
 LOG = logging.getLogger("rss-generator")
 
@@ -44,6 +44,13 @@ def main() -> int:
                 continue
             LOG.warning("%s: %s; se conserva el feed anterior", source["id"], error)
             current = []
-        count = write_feed(source, [*current, *previous], target, args.base_url, args.limit)
+        current_urls = {item.url for item in current}
+        retained = [item for item in previous if item.url not in current_urls]
+        summaries = [item for item in retained if not item.content]
+        completed = [item for item in retained if item.content]
+        if summaries and current:
+            LOG.info("%s: completando %d entradas conservadas del feed anterior", source["id"], len(summaries))
+            summaries = enrich_items(summaries)
+        count = write_feed(source, [*current, *summaries, *completed], target, args.base_url, args.limit)
         LOG.info("%s: %d entradas escritas en %s", source["id"], count, target)
     return 1 if failures else 0

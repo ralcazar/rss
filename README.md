@@ -45,10 +45,13 @@ python scripts/validate_feeds.py site/feeds
 python -m pytest -q
 ```
 
-Los feeds quedan en `site/feeds`. El generador conserva y combina las entradas de un feed
-anterior, elimina duplicados mediante su URL canónica y mantiene como máximo 50 noticias.
+Los feeds quedan en `site/feeds`. Por cada resultado de la portada, el generador abre la
+página de la noticia e incluye su texto HTML completo, todas sus imágenes y los vídeos
+incrustados. El generador conserva y combina las entradas de un feed anterior, elimina
+duplicados mediante su URL canónica y mantiene como máximo 50 noticias.
 En GitHub Actions se intenta descargar primero la versión ya publicada para conservar
-noticias que hayan desaparecido de la portada.
+noticias que hayan desaparecido de la portada. Si una entrada conservada todavía contiene
+el antiguo resumen recortado, su página de detalle se descarga una vez para completarla.
 
 ## Añadir otra página
 
@@ -72,8 +75,10 @@ ninguno de esos formatos está presente, junto con su correspondiente prueba.
 ## Formato y tolerancia a errores
 
 Cada feed incluye URL propia mediante Atom, idioma, fecha de construcción, TTL, GUID
-permanentes, fechas RFC 822, contenido enriquecido y metadata Media RSS para imágenes. Es
-RSS 2.0 en UTF-8 y puede ser consumido por Feedly.
+permanentes, fechas RFC 822, contenido enriquecido y metadata Media RSS para todas las
+imágenes y vídeos. El HTML completo se publica tanto en `description` como en
+`content:encoded` para evitar que los lectores que solo admiten uno de los dos campos lo
+recorten. Es RSS 2.0 en UTF-8 y puede ser consumido por Feedly.
 
 Si una descarga falla temporalmente y existe una versión anterior, se vuelve a publicar
 esa versión. Si nunca se ha podido obtener ninguna noticia, el trabajo falla en lugar de
