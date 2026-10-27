@@ -2,7 +2,7 @@ name: Actualizar feeds RSS
 
 on:
   schedule:
-    - cron: "17 */4 * * *"
+    - cron: "18 */4 * * *"
   workflow_dispatch:
   push:
     branches: [main]
