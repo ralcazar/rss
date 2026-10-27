@@ -28,7 +28,7 @@ workflow calcula esa dirección automáticamente, por lo que no hay que editar e
    feed sin esperar a la siguiente ejecución programada.
 5. Copia la URL indicada arriba en Feedly.
 
-El cron se ejecuta a los 17 minutos de las horas `00`, `04`, `08`, `12`, `16` y `20`
+El cron se ejecuta a los 18 minutos de las horas `00`, `04`, `08`, `12`, `16` y `20`
 UTC. GitHub puede retrasar ligeramente los trabajos programados. También se despliega al
 actualizar `main` y se puede ejecutar manualmente en cualquier momento.
 
